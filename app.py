@@ -437,69 +437,102 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("💰 Meerwerk Scanner")
 
-    # Business case uitleg
-    st.info("""
-    **Doelstelling:** Detecteer potentieel factureerbaar meerwerk dat in monteurnotities vermeld staat maar mogelijk niet gefactureerd wordt.
-
-    **Potentiële benefit:** Bij 5% gemist meerwerk op 500 werkbonnen/maand à €150 gemiddeld = **€45.000/jaar** extra omzet.
+    # ===================
+    # SECTIE 1: HET DOEL
+    # ===================
+    st.subheader("🎯 Doel")
+    st.markdown("""
+    Monteurs schrijven notities bij werkbonnen. Soms staat daar extra werk in dat
+    **wel uitgevoerd maar niet gefactureerd** wordt. Deze scanner vindt die gevallen.
     """)
 
+    # ===================
+    # SECTIE 2: HOE WERKT HET
+    # ===================
+    st.subheader("⚙️ Hoe werkt het?")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**Stap 1: Scannen**")
+        st.caption("We doorzoeken monteurnotities op woorden die wijzen op extra werk")
+    with col2:
+        st.markdown("**Stap 2: Herkennen**")
+        st.caption("Woorden als 'vervangen', 'nieuw', 'extra' triggeren een melding")
+    with col3:
+        st.markdown("**Stap 3: Controleren**")
+        st.caption("Jullie checken of dit werk daadwerkelijk gefactureerd is")
+
+    # Toon de zoekwoorden
+    with st.expander("📋 Welke woorden zoeken we?"):
+        st.markdown("""
+        | Categorie | Zoekwoorden | Geschatte waarde |
+        |-----------|-------------|------------------|
+        | Component vervanging | "vervangen", "vervanging", "nieuw geplaatst" | €150 |
+        | Accu werk | "accu vervangen", "batterij nieuw" | €85 |
+        | PIR/Detector | "pir vervangen", "detector nieuw" | €120 |
+        | Camera/Recorder | "camera vervangen", "recorder nieuw" | €350 |
+        | Slot/Sleutel | "slot vervangen", "sleutel bijgemaakt" | €75 |
+        | Bekabeling | "kabel getrokken", "bekabeling nieuw" | €200 |
+        """)
+
+    st.divider()
+
+    # ===================
+    # SECTIE 3: DE RESULTATEN
+    # ===================
+    st.subheader("📊 Top 10 Meerwerk Kandidaten")
+
     if blob_data:
-        if st.button("🔍 Start Meerwerk Scan", type="primary", key="meerwerk_btn"):
-            with st.spinner("Analyseren van notities..."):
-                resultaten = run_meerwerk_analyse(blob_data)
+        # Voer analyse direct uit (geen knop nodig)
+        resultaten = run_meerwerk_analyse(blob_data)
+
+        if resultaten:
+            # Compacte samenvatting
+            st.caption(f"Gescand: {len(blob_data.get('monteur_notities', []))} notities → {len(resultaten)} met potentieel meerwerk gevonden")
 
             st.divider()
 
-            # Samenvatting
-            totaal_waarde = sum(r["geschatte_waarde"] for r in resultaten)
+            # Toon top 10
+            for i, result in enumerate(resultaten[:10], 1):
+                indicaties = [m["indicatie"] for m in result["meerwerk_items"]]
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Notities met meerwerk", len(resultaten))
-            with col2:
-                st.metric("Geschatte gemiste waarde", f"€{totaal_waarde:,.0f}")
-            with col3:
-                pct = (len(resultaten) / len(blob_data.get("monteur_notities", []))) * 100
-                st.metric("% met potentieel meerwerk", f"{pct:.1f}%")
+                # Header met nummer en belangrijkste info
+                st.markdown(f"### #{i} — {indicaties[0]}")
 
-            # Extrapolatie
-            st.divider()
-            st.subheader("📊 Extrapolatie naar jaarbasis")
+                col1, col2 = st.columns([2, 1])
 
-            col1, col2 = st.columns(2)
-            with col1:
-                wb_per_maand = st.number_input("Werkbonnen per maand", value=500, step=50)
-            with col2:
-                hit_rate = st.slider("Verwachte hit rate (%)", 1, 20, 5)
+                with col1:
+                    # De notitie zelf
+                    st.markdown("**Monteur notitie:**")
+                    st.info(result["tekst"])
 
-            jaar_meerwerk = wb_per_maand * 12 * (hit_rate / 100)
-            gem_waarde = totaal_waarde / len(resultaten) if resultaten else 100
-            jaar_omzet = jaar_meerwerk * gem_waarde
-
-            st.success(f"""
-            **Geschatte extra omzet per jaar:** €{jaar_omzet:,.0f}
-
-            Gebaseerd op {wb_per_maand} werkbonnen/maand, {hit_rate}% meerwerk detectie, €{gem_waarde:.0f} gem. waarde
-            """)
-
-            # Detail resultaten
-            st.divider()
-            st.subheader("🔎 Gedetecteerd meerwerk")
-
-            for i, result in enumerate(resultaten[:20], 1):
-                indicaties = ", ".join([m["indicatie"] for m in result["meerwerk_items"]])
-                with st.expander(f"#{i} | €{result['geschatte_waarde']} | {indicaties}"):
-                    st.markdown(f"**ID:** {result['id']}")
-                    st.markdown(f"**Geschatte waarde:** €{result['geschatte_waarde']}")
-                    st.markdown("**Meerwerk indicatoren:**")
+                with col2:
+                    # Gevonden indicatoren
+                    st.markdown("**Gedetecteerd:**")
                     for m in result["meerwerk_items"]:
-                        st.write(f"- {m['indicatie']} (€{m['geschatte_waarde']})")
-                    st.divider()
-                    st.text(result["tekst"])
+                        st.write(f"• {m['indicatie']}")
 
-            if len(resultaten) > 20:
-                st.info(f"Toont 20 van {len(resultaten)} resultaten")
+                    st.markdown("**Vraag:**")
+                    st.warning("Is dit gefactureerd?")
+
+                # Werkbon koppeling (placeholder - moet nog geïmplementeerd)
+                with st.expander("🔗 Bekijk gekoppelde werkbon"):
+                    st.caption(f"Blobveld ID: {result['id']}")
+                    st.info("⚠️ Werkbon koppeling wordt nog ontwikkeld. Zoek handmatig op dit ID in Syntess.")
+
+                st.divider()
+
+            # Meer laden optie
+            if len(resultaten) > 10:
+                if st.button(f"📥 Laad meer ({len(resultaten) - 10} overig)", key="load_more_meerwerk"):
+                    st.session_state.show_all_meerwerk = True
+
+                if st.session_state.get("show_all_meerwerk"):
+                    for i, result in enumerate(resultaten[10:20], 11):
+                        st.markdown(f"**#{i}** — {result['meerwerk_items'][0]['indicatie']}")
+                        st.text(result["tekst"][:150] + "...")
+        else:
+            st.success("✅ Geen potentieel meerwerk gevonden in de huidige dataset")
     else:
         st.warning("Geen data geladen")
 
