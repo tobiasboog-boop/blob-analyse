@@ -6,12 +6,16 @@ Streamlit App voor AI-analyse van werkbon blobvelden
 1. Meerwerk Scanner - Detecteer gemiste facturatie
 2. Contract Checker - Classificeer contract vs. meerwerk
 3. Terugkeer Analyse - Vind terugkerende storingen
-4. Compleetheid Check - Controleer notitie kwaliteit
+4. Rapportage - Maandoverzichten voor rapportages
+
+Documentatie Tab:
+5. Data Model - Uitleg over koppelingen tussen blobvelden en werkbonnen
 """
 
 import streamlit as st
 import json
 import re
+import pandas as pd
 from pathlib import Path
 from collections import defaultdict
 
@@ -124,10 +128,14 @@ def clean_tekst(tekst):
 
 
 def run_meerwerk_analyse(blob_data):
-    """Voer meerwerk analyse uit op alle notities."""
+    """Voer meerwerk analyse uit op notities MET werkbon koppeling."""
     resultaten = []
 
     for notitie in blob_data.get("monteur_notities", []):
+        # Skip notities zonder werkbon koppeling
+        if not notitie.get("werkbon"):
+            continue
+
         tekst = notitie.get("tekst", "")
         tekst_clean = clean_tekst(tekst)
         meerwerk = scan_for_meerwerk(tekst_clean)
@@ -139,7 +147,9 @@ def run_meerwerk_analyse(blob_data):
                 "tekst": tekst_clean[:300],
                 "meerwerk_items": meerwerk,
                 "aantal_items": len(meerwerk),
-                "geschatte_waarde": totaal_waarde
+                "geschatte_waarde": totaal_waarde,
+                "werkbon": notitie.get("werkbon"),
+                "sessie_info": notitie.get("sessie_info")
             })
 
     return sorted(resultaten, key=lambda x: x["geschatte_waarde"], reverse=True)
@@ -193,10 +203,14 @@ def classify_werk(tekst):
 
 
 def run_contract_analyse(blob_data):
-    """Voer contract classificatie uit op alle notities."""
+    """Voer contract classificatie uit op notities MET werkbon koppeling."""
     resultaten = {"CONTRACT": [], "MEERWERK": [], "ONZEKER": []}
 
     for notitie in blob_data.get("monteur_notities", []):
+        # Skip notities zonder werkbon koppeling
+        if not notitie.get("werkbon"):
+            continue
+
         tekst = notitie.get("tekst", "")
         tekst_clean = clean_tekst(tekst)
         classificatie = classify_werk(tekst_clean)
@@ -207,7 +221,8 @@ def run_contract_analyse(blob_data):
             "classificatie": classificatie["classificatie"],
             "confidence": classificatie["confidence"],
             "contract_matches": classificatie["contract_matches"],
-            "meerwerk_matches": classificatie["meerwerk_matches"]
+            "meerwerk_matches": classificatie["meerwerk_matches"],
+            "werkbon": notitie.get("werkbon")
         })
 
     return resultaten
@@ -288,92 +303,61 @@ def analyse_terugkeer_patronen(blob_data, werkbonnen_data):
 
 
 # =============================================================================
-# USE CASE 4: COMPLEETHEID CHECK
+# USE CASE 4: RAPPORTAGE
 # =============================================================================
 
-VEREISTE_ELEMENTEN = {
-    "actie": {
-        "patterns": [r"vervangen", r"geplaatst", r"aangepast", r"gerepareerd", r"getest", r"uitgevoerd", r"gecontroleerd"],
-        "beschrijving": "Uitgevoerde actie",
-        "gewicht": 3
-    },
-    "resultaat": {
-        "patterns": [r"werkt", r"functioneert", r"opgelost", r"verholpen", r"in orde", r"naar behoren"],
-        "beschrijving": "Resultaat/Status",
-        "gewicht": 2
-    },
-    "component": {
-        "patterns": [r"pir", r"camera", r"slot", r"sirene", r"centrale", r"detector", r"accu", r"kabel"],
-        "beschrijving": "Component benoemd",
-        "gewicht": 2
-    },
-    "locatie": {
-        "patterns": [r"zone\s*\d+", r"verdieping", r"hal", r"kantoor", r"magazijn", r"entree", r"gang"],
-        "beschrijving": "Locatie specificatie",
-        "gewicht": 1
-    }
-}
-
-
-def check_compleetheid(tekst):
-    """Check de compleetheid van een notitie."""
-    tekst_lower = tekst.lower()
-    gevonden = {}
-    totaal_score = 0
-    max_score = sum(e["gewicht"] for e in VEREISTE_ELEMENTEN.values())
-
-    for element, config in VEREISTE_ELEMENTEN.items():
-        aanwezig = any(re.search(p, tekst_lower) for p in config["patterns"])
-        gevonden[element] = aanwezig
-        if aanwezig:
-            totaal_score += config["gewicht"]
-
-    percentage = int((totaal_score / max_score) * 100)
-
-    # Bepaal kwaliteitslabel
-    if percentage >= 75:
-        kwaliteit = "GOED"
-    elif percentage >= 50:
-        kwaliteit = "MATIG"
-    else:
-        kwaliteit = "ONVOLLEDIG"
-
-    return {
-        "elementen": gevonden,
-        "score": totaal_score,
-        "max_score": max_score,
-        "percentage": percentage,
-        "kwaliteit": kwaliteit
-    }
-
-
-def run_compleetheid_analyse(blob_data):
-    """Voer compleetheid analyse uit op alle notities."""
-    resultaten = {"GOED": [], "MATIG": [], "ONVOLLEDIG": []}
-    scores = []
+def get_rapportage_data(blob_data):
+    """Verzamel data voor maandrapportage - alleen notities met werkbon koppeling."""
+    rapport_items = []
 
     for notitie in blob_data.get("monteur_notities", []):
-        tekst = notitie.get("tekst", "")
-        if len(tekst.strip()) < 10:  # Skip lege/minimale notities
+        # Alleen notities met werkbon koppeling
+        if not notitie.get("werkbon"):
             continue
 
-        check = check_compleetheid(tekst)
-        scores.append(check["percentage"])
+        werkbon = notitie.get("werkbon", {})
+        tekst = clean_tekst(notitie.get("tekst", ""))
 
-        resultaten[check["kwaliteit"]].append({
-            "id": notitie.get("id"),
-            "tekst": tekst[:200],
-            "score": check["percentage"],
-            "elementen": check["elementen"]
+        # Extract datum voor maandgroepering
+        melddatum = werkbon.get("melddatum", "")
+        maand = melddatum[:7] if melddatum else "Onbekend"  # Format: "2024-01"
+
+        rapport_items.append({
+            "werkbon_code": werkbon.get("werkbon_code", ""),
+            "klant": werkbon.get("klant", "Onbekend"),
+            "monteur": werkbon.get("monteur", "Onbekend"),
+            "datum": melddatum[:10] if melddatum else "",
+            "maand": maand,
+            "status": werkbon.get("status", "").strip(),
+            "notitie": tekst,
+            "blob_id": notitie.get("id", "")
         })
 
-    gem_score = sum(scores) / len(scores) if scores else 0
+    return rapport_items
 
-    return {
-        "verdeling": {k: len(v) for k, v in resultaten.items()},
-        "gemiddelde_score": gem_score,
-        "details": resultaten
-    }
+
+def groepeer_per_maand(rapport_items):
+    """Groepeer rapport items per maand."""
+    per_maand = defaultdict(list)
+    for item in rapport_items:
+        per_maand[item["maand"]].append(item)
+    return dict(sorted(per_maand.items(), reverse=True))
+
+
+def groepeer_per_klant(rapport_items):
+    """Groepeer rapport items per klant."""
+    per_klant = defaultdict(list)
+    for item in rapport_items:
+        per_klant[item["klant"]].append(item)
+    return dict(sorted(per_klant.items()))
+
+
+def groepeer_per_monteur(rapport_items):
+    """Groepeer rapport items per monteur."""
+    per_monteur = defaultdict(list)
+    for item in rapport_items:
+        per_monteur[item["monteur"]].append(item)
+    return dict(sorted(per_monteur.items()))
 
 
 # =============================================================================
@@ -395,7 +379,7 @@ with st.sidebar:
     # Notifica logo
     logo_path = Path(__file__).parent / "assets" / "notifica_logo.jpg"
     if logo_path.exists():
-        st.image(str(logo_path), use_container_width=True)
+        st.image(str(logo_path), width=120)
         st.divider()
 
     st.header("Over deze app")
@@ -407,7 +391,10 @@ with st.sidebar:
     1. 💰 Meerwerk Scanner
     2. 📋 Contract Checker
     3. 🔄 Terugkeer Analyse
-    4. ✅ Compleetheid Check
+    4. 📊 Rapportage
+
+    **Documentatie:**
+    5. 🗂️ Data Model
     """)
 
     st.divider()
@@ -418,121 +405,165 @@ with st.sidebar:
         st.divider()
         st.markdown("**Dataset:**")
         totals = blob_data.get("metadata", {}).get("totals", {})
-        st.caption(f"Notities: {totals.get('monteur_notities', 0)}")
+        # Tel notities met werkbon koppeling
+        notities_met_werkbon = sum(1 for n in blob_data.get("monteur_notities", []) if n.get("werkbon"))
+        totaal_notities = totals.get('monteur_notities', 0)
+        st.caption(f"Notities met werkbon: {notities_met_werkbon}/{totaal_notities}")
         st.caption(f"Storingen: {totals.get('storing_meldingen', 0)}")
-        st.caption(f"Cases: {totals.get('werk_context', 0)}")
         st.caption(f"Uren: {totals.get('uren_registraties', 0)}")
 
 # Main tabs
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "💰 Meerwerk Scanner",
     "📋 Contract Checker",
     "🔄 Terugkeer Analyse",
-    "✅ Compleetheid Check"
+    "📊 Rapportage",
+    "🗂️ Data Model"
 ])
 
 # =============================================================================
 # TAB 1: MEERWERK SCANNER
 # =============================================================================
 with tab1:
-    st.header("💰 Meerwerk Scanner")
+    st.header("Meerwerk Scanner")
 
-    # ===================
-    # SECTIE 1: HET DOEL
-    # ===================
-    st.subheader("🎯 Doel")
+    # Korte uitleg bovenaan
     st.markdown("""
-    Monteurs schrijven notities bij werkbonnen. Soms staat daar extra werk in dat
-    **wel uitgevoerd maar niet gefactureerd** wordt. Deze scanner vindt die gevallen.
+    Scan monteurnotities op mogelijk **niet-gefactureerd meerwerk**.
+    Woorden als "vervangen", "nieuw", "extra" worden automatisch gedetecteerd.
     """)
 
-    # ===================
-    # SECTIE 2: HOE WERKT HET
-    # ===================
-    st.subheader("⚙️ Hoe werkt het?")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("**Stap 1: Scannen**")
-        st.caption("We doorzoeken monteurnotities op woorden die wijzen op extra werk")
-    with col2:
-        st.markdown("**Stap 2: Herkennen**")
-        st.caption("Woorden als 'vervangen', 'nieuw', 'extra' triggeren een melding")
-    with col3:
-        st.markdown("**Stap 3: Controleren**")
-        st.caption("Jullie checken of dit werk daadwerkelijk gefactureerd is")
-
-    # Toon de zoekwoorden
-    with st.expander("📋 Welke woorden zoeken we?"):
+    with st.expander("Hoe werkt het?"):
         st.markdown("""
-        | Categorie | Zoekwoorden | Geschatte waarde |
-        |-----------|-------------|------------------|
-        | Component vervanging | "vervangen", "vervanging", "nieuw geplaatst" | €150 |
-        | Accu werk | "accu vervangen", "batterij nieuw" | €85 |
-        | PIR/Detector | "pir vervangen", "detector nieuw" | €120 |
-        | Camera/Recorder | "camera vervangen", "recorder nieuw" | €350 |
-        | Slot/Sleutel | "slot vervangen", "sleutel bijgemaakt" | €75 |
-        | Bekabeling | "kabel getrokken", "bekabeling nieuw" | €200 |
+        **Detectie keywords:** vervangen, nieuw, accu, pir, camera, slot, kabel, extra
+
+        | Categorie | Geschatte waarde |
+        |-----------|------------------|
+        | Component vervanging | ~150 EUR |
+        | Accu/Batterij | ~85 EUR |
+        | PIR/Detector | ~120 EUR |
+        | Camera/Recorder | ~350 EUR |
+        | Slot/Sleutel | ~75 EUR |
+        | Bekabeling | ~200 EUR |
         """)
 
     st.divider()
 
-    # ===================
-    # SECTIE 3: DE RESULTATEN
-    # ===================
-    st.subheader("📊 Top 10 Meerwerk Kandidaten")
-
     if blob_data:
-        # Voer analyse direct uit (geen knop nodig)
         resultaten = run_meerwerk_analyse(blob_data)
 
         if resultaten:
-            # Compacte samenvatting
-            st.caption(f"Gescand: {len(blob_data.get('monteur_notities', []))} notities → {len(resultaten)} met potentieel meerwerk gevonden")
+            # === FILTERS ===
+            st.subheader("Filters")
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+            # Verzamel alle unieke categorieën
+            alle_categorieen = set()
+            for r in resultaten:
+                for m in r["meerwerk_items"]:
+                    alle_categorieen.add(m["indicatie"])
+
+            with filter_col1:
+                geselecteerde_types = st.multiselect(
+                    "Meerwerk type",
+                    options=sorted(alle_categorieen),
+                    default=[],
+                    placeholder="Alle types"
+                )
+
+            with filter_col2:
+                min_waarde = st.slider(
+                    "Minimale waarde (EUR)",
+                    min_value=0,
+                    max_value=500,
+                    value=0,
+                    step=25
+                )
+
+            with filter_col3:
+                zoek_tekst = st.text_input("Zoek in notitie", placeholder="bijv. 'camera'")
+
+            # Pas filters toe
+            gefilterd = resultaten
+            if geselecteerde_types:
+                gefilterd = [r for r in gefilterd if any(
+                    m["indicatie"] in geselecteerde_types for m in r["meerwerk_items"]
+                )]
+            if min_waarde > 0:
+                gefilterd = [r for r in gefilterd if r["geschatte_waarde"] >= min_waarde]
+            if zoek_tekst:
+                gefilterd = [r for r in gefilterd if zoek_tekst.lower() in r["tekst"].lower()]
 
             st.divider()
 
-            # Toon top 10
-            for i, result in enumerate(resultaten[:10], 1):
+            # Samenvatting
+            totaal_notities = sum(1 for n in blob_data.get('monteur_notities', []) if n.get("werkbon"))
+            totaal_meerwerk = len(gefilterd)
+            totaal_waarde = sum(r["geschatte_waarde"] for r in gefilterd)
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Notities met werkbon", totaal_notities)
+            with col2:
+                st.metric("Meerwerk gevonden", f"{totaal_meerwerk} / {len(resultaten)}")
+            with col3:
+                st.metric("Geschatte waarde", f"{totaal_waarde} EUR")
+
+            st.divider()
+
+            # Toon resultaten als cards
+            for i, result in enumerate(gefilterd[:10], 1):
+                werkbon = result.get("werkbon", {})
                 indicaties = [m["indicatie"] for m in result["meerwerk_items"]]
 
-                # Header met nummer en belangrijkste info
-                st.markdown(f"### #{i} — {indicaties[0]}")
+                # === WERKBON HEADER ===
+                if werkbon:
+                    werkbon_code = werkbon.get("werkbon_code", "Onbekend")
+                    klant = werkbon.get("klant", "")
+                    monteur = werkbon.get("monteur", "")
+                    datum = werkbon.get("melddatum", "")[:10] if werkbon.get("melddatum") else ""
+                    status = werkbon.get("status", "").strip()
 
-                col1, col2 = st.columns([2, 1])
+                    st.markdown(f"### #{i} | {werkbon_code}")
+                    st.caption(f"Klant: {klant} | Monteur: {monteur} | Datum: {datum} | Status: {status}")
+                else:
+                    st.markdown(f"### #{i} | Werkbon niet gekoppeld")
+                    st.caption(f"Blobveld ID: {result.get('id', 'onbekend')}")
 
-                with col1:
-                    # De notitie zelf
+                # === TWEE KOLOMMEN: NOTITIE + ANALYSE ===
+                col_left, col_right = st.columns([3, 2])
+
+                with col_left:
                     st.markdown("**Monteur notitie:**")
-                    st.info(result["tekst"])
+                    # Toon notitie in een box
+                    st.code(result["tekst"], language=None)
 
-                with col2:
-                    # Gevonden indicatoren
-                    st.markdown("**Gedetecteerd:**")
+                with col_right:
+                    st.markdown("**Gedetecteerd meerwerk:**")
                     for m in result["meerwerk_items"]:
-                        st.write(f"• {m['indicatie']}")
+                        st.write(f"- {m['indicatie']} (~{m['geschatte_waarde']} EUR)")
 
-                    st.markdown("**Vraag:**")
-                    st.warning("Is dit gefactureerd?")
+                    st.markdown(f"**Totaal:** ~{result['geschatte_waarde']} EUR")
 
-                # Werkbon koppeling (placeholder - moet nog geïmplementeerd)
-                with st.expander("🔗 Bekijk gekoppelde werkbon"):
-                    st.caption(f"Blobveld ID: {result['id']}")
-                    st.info("⚠️ Werkbon koppeling wordt nog ontwikkeld. Zoek handmatig op dit ID in Syntess.")
+                    # Actie vraag
+                    st.warning("Actie: Controleer of dit gefactureerd is")
 
                 st.divider()
 
-            # Meer laden optie
-            if len(resultaten) > 10:
-                if st.button(f"📥 Laad meer ({len(resultaten) - 10} overig)", key="load_more_meerwerk"):
-                    st.session_state.show_all_meerwerk = True
+            # Meer resultaten
+            if len(gefilterd) > 10:
+                with st.expander(f"Bekijk {len(gefilterd) - 10} overige resultaten"):
+                    for i, result in enumerate(gefilterd[10:], 11):
+                        werkbon = result.get("werkbon", {})
+                        wb_code = werkbon.get("werkbon_code", f"ID: {result.get('id')}") if werkbon else f"ID: {result.get('id')}"
+                        indicaties = ", ".join([m["indicatie"] for m in result["meerwerk_items"]])
+                        st.write(f"**#{i}** | {wb_code[:40]}... | {indicaties}")
 
-                if st.session_state.get("show_all_meerwerk"):
-                    for i, result in enumerate(resultaten[10:20], 11):
-                        st.markdown(f"**#{i}** — {result['meerwerk_items'][0]['indicatie']}")
-                        st.text(result["tekst"][:150] + "...")
+            if len(gefilterd) == 0 and len(resultaten) > 0:
+                st.info(f"Geen resultaten met huidige filters. Totaal zonder filter: {len(resultaten)}")
+
         else:
-            st.success("✅ Geen potentieel meerwerk gevonden in de huidige dataset")
+            st.success("Geen potentieel meerwerk gevonden in de dataset")
     else:
         st.warning("Geen data geladen")
 
@@ -540,252 +571,481 @@ with tab1:
 # TAB 2: CONTRACT CHECKER
 # =============================================================================
 with tab2:
-    st.header("📋 Contract Checker")
+    st.header("Contract Checker")
 
-    st.info("""
-    **Doelstelling:** Automatisch classificeren of werkzaamheden binnen het servicecontract vallen of factureerbaar meerwerk zijn.
+    st.warning("""
+    **Status: In ontwikkeling**
 
-    **Potentiële benefit:** Tijdsbesparing op administratieve controle + correcte facturatie. Geschatte besparing: **2 uur/week** aan handmatige controle.
+    Deze functie wordt pas volledig operationeel wanneer contractgegevens beschikbaar zijn.
     """)
 
-    if blob_data:
-        if st.button("🔍 Start Contract Analyse", type="primary", key="contract_btn"):
-            with st.spinner("Classificeren van werkzaamheden..."):
-                resultaten = run_contract_analyse(blob_data)
+    st.markdown("""
+    **Doel:** Werkbonnen automatisch beoordelen tegen contractuele afspraken.
 
-            st.divider()
+    **Wat is nodig:**
+    - Contractgegevens per klant (wat valt onder het servicecontract?)
+    - Koppeling tussen klant en contracttype
 
-            # Samenvatting
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Contract werk", len(resultaten["CONTRACT"]),
-                         help="Valt waarschijnlijk binnen servicecontract")
-            with col2:
-                st.metric("Meerwerk", len(resultaten["MEERWERK"]),
-                         help="Waarschijnlijk factureerbaar")
-            with col3:
-                st.metric("Onzeker", len(resultaten["ONZEKER"]),
-                         help="Handmatige controle nodig")
-
-            # Visualisatie
-            st.divider()
-            totaal = sum(len(v) for v in resultaten.values())
-
-            st.subheader("📊 Verdeling")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                pct = (len(resultaten["CONTRACT"]) / totaal) * 100 if totaal else 0
-                st.progress(pct / 100)
-                st.caption(f"Contract: {pct:.0f}%")
-            with col2:
-                pct = (len(resultaten["MEERWERK"]) / totaal) * 100 if totaal else 0
-                st.progress(pct / 100)
-                st.caption(f"Meerwerk: {pct:.0f}%")
-            with col3:
-                pct = (len(resultaten["ONZEKER"]) / totaal) * 100 if totaal else 0
-                st.progress(pct / 100)
-                st.caption(f"Onzeker: {pct:.0f}%")
-
-            # Toon meerwerk items (meest interessant)
-            st.divider()
-            st.subheader("🔴 Potentieel Meerwerk (te factureren)")
-
-            st.markdown("""
-            **Hoe werkt het?** De classificatie zoekt naar keywords:
-            - 🔴 **Meerwerk keywords:** vervangen, defect, kapot, storing, reparatie, nieuw, extra, etc.
-            - 🟢 **Contract keywords:** onderhoud, preventief, controle, inspectie, periodiek, etc.
-            """)
-
-            for i, item in enumerate(resultaten["MEERWERK"][:15], 1):
-                meerwerk_kw = ", ".join(item.get("meerwerk_matches", [])) or "geen"
-                with st.expander(f"#{i} | Gevonden: **{meerwerk_kw}** | ID: {item['id']}"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("**🔴 Meerwerk keywords gevonden:**")
-                        if item.get("meerwerk_matches"):
-                            for kw in item["meerwerk_matches"]:
-                                st.write(f"  • `{kw}`")
-                        else:
-                            st.write("  (geen)")
-                    with col2:
-                        st.markdown("**🟢 Contract keywords gevonden:**")
-                        if item.get("contract_matches"):
-                            for kw in item["contract_matches"]:
-                                st.write(f"  • `{kw}`")
-                        else:
-                            st.write("  (geen)")
-
-                    st.markdown(f"**Conclusie:** {item['confidence']}% zekerheid dat dit **meerwerk** is")
-                    st.divider()
-                    st.markdown("**Originele notitie:**")
-                    st.info(item["tekst"])
-    else:
-        st.warning("Geen data geladen")
+    **Wanneer operationeel:**
+    - Werkbonnen vergelijken met contractafspraken
+    - Automatisch signaleren: "Dit valt buiten contract, factureer als meerwerk"
+    - Voorkomen dat werk onterecht als contract wordt afgehandeld
+    """)
 
 # =============================================================================
 # TAB 3: TERUGKEER ANALYSE
 # =============================================================================
 with tab3:
-    st.header("🔄 Terugkeer Analyse")
+    st.header("Terugkeer Analyse")
 
-    st.info("""
-    **Doelstelling:** Identificeer terugkerende storingen en probleemlocaties om proactief preventief onderhoud aan te bieden.
+    st.warning("""
+    **Status: In ontwikkeling**
 
-    **Potentiële benefit:**
-    - Extra omzet door preventieve onderhoudscontracten
-    - Minder spoedbezoeken = lagere kosten
-    - Hogere klanttevredenheid
-
-    **Geschatte waarde:** 1 preventief contract per 10 geïdentificeerde probleemlocaties à €500/jaar = extra omzet.
+    Deze functie wordt krachtiger wanneer we meer historische data en locatiegegevens koppelen.
     """)
 
+    st.markdown("""
+    **Doel:** Herkennen van terugkerende storingen bij dezelfde klant of locatie.
+
+    **Waarom is dit waardevol?**
+
+    Door blobvelden te analyseren kunnen we patronen ontdekken die je in losse werkbonnen niet ziet:
+    - Klant X heeft in 6 maanden 4x een PIR-storing gehad
+    - Locatie Y heeft structurele communicatieproblemen
+    - Component Z faalt vaker dan normaal bij bepaalde installaties
+
+    **Wat levert dit op?**
+    - Proactief preventief onderhoud aanbieden voordat klant belt
+    - Structurele problemen aanpakken ipv steeds opnieuw repareren
+    - Extra omzet uit preventieve contracten
+    """)
+
+    st.divider()
+
+    st.subheader("Hoe werkt het?")
+
+    st.markdown("""
+    **Stap 1: Koppeling leggen**
+    ```
+    Blobveld (notitie) → Werkbon → Klant/Locatie
+    ```
+    Via de werkbon-koppeling weten we bij welke klant een storing hoort.
+
+    **Stap 2: Patronen zoeken**
+    - Groepeer storingen per klant
+    - Tel frequentie per storingstype
+    - Identificeer uitschieters (meer dan X storingen in Y maanden)
+
+    **Stap 3: Actie ondernemen**
+    - Klanten met terugkerende storingen benaderen
+    - Preventief onderhoudscontract aanbieden
+    - Root cause aanpakken
+    """)
+
+    st.divider()
+
+    st.subheader("Wat is nodig?")
+
+    st.markdown("""
+    - **Meer historische data** - Huidige sample is beperkt (198 notities)
+    - **Klant-identificatie** - Nu hebben we klantnaam, maar unieke klant-ID is beter
+    - **Tijdsperiode** - Data over langere periode om trends te zien
+    """)
+
+    st.info("""
+    **Voorbeeld van gewenste output:**
+
+    | Klant | Storingen (6 mnd) | Type | Actie |
+    |-------|-------------------|------|-------|
+    | Lucardi 490 | 4x | PIR/Detector | Preventief contract aanbieden |
+    | Zeeman 263 | 3x | Communicatie | Technische inspectie plannen |
+    """)
+
+# =============================================================================
+# TAB 4: RAPPORTAGE
+# =============================================================================
+with tab4:
+    st.header("Rapportage")
+
+    st.markdown("""
+    Genereer overzichten van werkbonnen met monteurnotities voor maandrapportages.
+    Niet meer handmatig copy-pasten uit Syntess!
+    """)
+
+    st.divider()
+
     if blob_data:
-        if st.button("🔍 Start Terugkeer Analyse", type="primary", key="terugkeer_btn"):
-            with st.spinner("Analyseren van storingen..."):
-                resultaten = analyse_terugkeer_patronen(blob_data, werkbonnen_data)
+        # Haal rapportage data op
+        rapport_items = get_rapportage_data(blob_data)
+
+        if rapport_items:
+            # === FILTERS ===
+            st.subheader("Filters")
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+            # Verzamel unieke waarden
+            alle_maanden = sorted(set(item["maand"] for item in rapport_items if item["maand"] != "Onbekend"), reverse=True)
+            alle_klanten = sorted(set(item["klant"] for item in rapport_items))
+            alle_monteurs = sorted(set(item["monteur"] for item in rapport_items))
+
+            with filter_col1:
+                geselecteerde_maand = st.selectbox(
+                    "Periode",
+                    options=["Alle"] + alle_maanden,
+                    index=0
+                )
+
+            with filter_col2:
+                geselecteerde_klant = st.selectbox(
+                    "Klant",
+                    options=["Alle"] + alle_klanten,
+                    index=0
+                )
+
+            with filter_col3:
+                geselecteerde_monteur = st.selectbox(
+                    "Monteur",
+                    options=["Alle"] + alle_monteurs,
+                    index=0
+                )
+
+            # Pas filters toe
+            gefilterd = rapport_items
+            if geselecteerde_maand != "Alle":
+                gefilterd = [r for r in gefilterd if r["maand"] == geselecteerde_maand]
+            if geselecteerde_klant != "Alle":
+                gefilterd = [r for r in gefilterd if r["klant"] == geselecteerde_klant]
+            if geselecteerde_monteur != "Alle":
+                gefilterd = [r for r in gefilterd if r["monteur"] == geselecteerde_monteur]
 
             st.divider()
 
-            # Samenvatting
-            st.metric("Totaal storingen gedetecteerd", resultaten["totaal_storingen"])
+            # === SAMENVATTING ===
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Werkbonnen", len(gefilterd))
+            with col2:
+                st.metric("Unieke klanten", len(set(r["klant"] for r in gefilterd)))
+            with col3:
+                st.metric("Unieke monteurs", len(set(r["monteur"] for r in gefilterd)))
 
-            # Storing types
             st.divider()
-            st.subheader("📊 Storing Categorieën")
 
-            storing_types = resultaten["storing_types"]
-            if storing_types:
-                # Sorteer op aantal
-                sorted_types = sorted(storing_types.items(), key=lambda x: x[1], reverse=True)
+            # === COMPACTE MATRIX WEERGAVE ===
+            st.subheader("Overzicht")
 
-                for storing_type, aantal in sorted_types:
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(storing_type)
-                        pct = (aantal / resultaten["totaal_storingen"]) * 100
-                        st.progress(pct / 100)
-                    with col2:
-                        st.metric("Aantal", aantal)
+            # Maak dataframe voor compacte weergave
+            df_data = []
+            for item in gefilterd:
+                # Verkort notitie voor matrix weergave
+                notitie_kort = item['notitie'][:80] + "..." if len(item['notitie']) > 80 else item['notitie']
+                df_data.append({
+                    "Werkbon": item['werkbon_code'],
+                    "Klant": item['klant'][:25] + "..." if len(item['klant']) > 25 else item['klant'],
+                    "Monteur": item['monteur'],
+                    "Datum": item['datum'],
+                    "Status": item['status'],
+                    "Notitie": notitie_kort
+                })
 
-            # Aanbevelingen
+            df = pd.DataFrame(df_data)
+
+            # Toon als interactieve tabel
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Werkbon": st.column_config.TextColumn("Werkbon", width="small"),
+                    "Klant": st.column_config.TextColumn("Klant", width="medium"),
+                    "Monteur": st.column_config.TextColumn("Monteur", width="small"),
+                    "Datum": st.column_config.TextColumn("Datum", width="small"),
+                    "Status": st.column_config.TextColumn("Status", width="small"),
+                    "Notitie": st.column_config.TextColumn("Notitie", width="large"),
+                }
+            )
+
+            # === DETAIL WEERGAVE ===
             st.divider()
-            st.subheader("💡 Aanbevelingen")
+            with st.expander("Volledige notities bekijken"):
+                for item in gefilterd:
+                    st.markdown(f"**{item['werkbon_code']}** | {item['klant']} | {item['monteur']} | {item['datum']}")
+                    if item['notitie']:
+                        st.text(item['notitie'][:500])
+                    st.markdown("---")
 
-            if storing_types:
-                top_storing = max(storing_types.items(), key=lambda x: x[1])
-                st.success(f"""
-                **Meest voorkomende storing:** {top_storing[0]} ({top_storing[1]}x)
-
-                **Aanbeveling:** Focus preventief onderhoud op deze categorie.
-                Potentieel {top_storing[1] // 5} klanten voor uitgebreid servicecontract.
-                """)
-
-            # Detail voorbeelden
+            # === EXPORT SECTIE ===
             st.divider()
-            st.subheader("🔎 Storing Details")
+            st.subheader("Export")
 
-            for i, storing in enumerate(resultaten["details"][:15], 1):
-                with st.expander(f"#{i} | Score {storing['score']} | {storing['type']}"):
-                    st.markdown(f"**ID:** {storing['id']}")
-                    st.markdown(f"**Bron:** {storing['type']}")
-                    st.divider()
-                    st.text(storing["tekst"])
+            # CSV download
+            csv = df.to_csv(index=False, sep=";")
+            st.download_button(
+                label="Download als CSV",
+                data=csv,
+                file_name=f"werkbonnen_rapport_{geselecteerde_maand if geselecteerde_maand != 'Alle' else 'alle'}.csv",
+                mime="text/csv"
+            )
+
+        else:
+            st.info("Geen werkbonnen met notities gevonden in de dataset.")
     else:
         st.warning("Geen data geladen")
 
 # =============================================================================
-# TAB 4: COMPLEETHEID CHECK
+# TAB 5: DATA MODEL
 # =============================================================================
-with tab4:
-    st.header("✅ Compleetheid Check")
+with tab5:
+    st.header("🗂️ Data Model & Koppelingen")
 
-    st.info("""
-    **Doelstelling:** Controleer of monteurnotities voldoende informatie bevatten voor facturatie, contractvalidatie en kennisbehoud.
-
-    **Potentiële benefit:**
-    - Minder terugbelacties door incomplete info
-    - Betere kennisoverdracht tussen monteurs
-    - Snellere afhandeling van facturen
-
-    **Geschatte besparing:** 15 min/dag aan terugbelacties = **60 uur/jaar**
+    st.markdown("""
+    Dit tabblad legt uit hoe de blobvelden uit Syntess gekoppeld worden aan werkbonnen in het DWH,
+    en hoe deze data uiteindelijk in het semantisch model terecht komt.
     """)
 
+    st.divider()
+
+    # ===================
+    # SECTIE 1: WAT ZIJN BLOBVELDEN?
+    # ===================
+    st.subheader("📦 Wat zijn Blobvelden?")
+
+    st.markdown("""
+    **Blobvelden** zijn ongestructureerde tekstvelden uit het Syntess ERP-systeem.
+    Ze bevatten vrije tekst die monteurs invullen, zoals notities en werkbeschrijvingen.
+
+    In Syntess worden deze opgeslagen als **binary large objects (blobs)** - vandaar de naam.
+    Wij exporteren ze naar leesbare tekstbestanden voor analyse.
+    """)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**RTF Blobvelden** (Rich Text Format)")
+        st.code("""
+Bron: AT_MWBSESS, AT_UITVBEST, AT_WERK
+Format: .txt bestanden met RTF markup
+Inhoud: Monteur notities, storingsmeldingen
+        """, language="text")
+
+    with col2:
+        st.markdown("**XML Blobvelden** (Gestructureerd)")
+        st.code("""
+Bron: AT_MWBSESS
+Format: .txt bestanden met XML data
+Inhoud: Urenregistraties (INGELEVERDE_URENREGELS)
+        """, language="text")
+
+    st.divider()
+
+    # ===================
+    # SECTIE 2: DE BLOBVELD BRONNEN
+    # ===================
+    st.subheader("📁 Blobveld Bronnen")
+
+    st.markdown("We gebruiken 4 types blobvelden uit 3 verschillende Syntess tabellen:")
+
+    bronnen_data = [
+        {"Tabel": "AT_MWBSESS", "Blobveld": "NOTITIE", "Inhoud": "Monteur notities over uitgevoerd werk", "Aantal": blob_data.get("metadata", {}).get("totals", {}).get("monteur_notities", 0) if blob_data else 0},
+        {"Tabel": "AT_MWBSESS", "Blobveld": "INGELEVERDE_URENREGELS", "Inhoud": "XML met geregistreerde uren", "Aantal": blob_data.get("metadata", {}).get("totals", {}).get("uren_registraties", 0) if blob_data else 0},
+        {"Tabel": "AT_UITVBEST", "Blobveld": "TEKST", "Inhoud": "Storingsmeldingen en werkbeschrijvingen", "Aantal": blob_data.get("metadata", {}).get("totals", {}).get("storing_meldingen", 0) if blob_data else 0},
+        {"Tabel": "AT_WERK", "Blobveld": "GC_INFORMATIE", "Inhoud": "Case/werkbon context informatie", "Aantal": blob_data.get("metadata", {}).get("totals", {}).get("werk_context", 0) if blob_data else 0},
+    ]
+
+    # Toon als tabel
+    st.table(bronnen_data)
+
+    st.divider()
+
+    # ===================
+    # SECTIE 3: DE KOPPELING
+    # ===================
+    st.subheader("🔗 De Koppeling: Blobveld → Werkbon")
+
+    st.markdown("""
+    **Het probleem:** Blobvelden bevatten waardevolle tekst, maar hoe weten we bij welke werkbon ze horen?
+
+    **De oplossing:** Via de DWH tabel `werkbonnen."Mobiele uitvoersessies"` kunnen we de koppeling maken.
+    """)
+
+    st.info("""
+    **De koppelingsketen:**
+
+    ```
+    Blobveld bestand (bijv. "123456.NOTITIE.txt")
+            ↓
+    Blob ID = 123456 (= MobieleuitvoersessieRegelKey)
+            ↓
+    DWH tabel: werkbonnen."Mobiele uitvoersessies"
+            ↓
+    DocumentKey (= WerkbonDocumentKey)
+            ↓
+    DWH tabel: werkbonnen."Documenten"
+            ↓
+    Werkbon details (code, klant, monteur, status, etc.)
+    ```
+    """)
+
+    # Visueel diagram
+    st.markdown("### Visuele weergave")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        st.markdown("**📄 Blobveld**")
+        st.code("123456.NOTITIE.txt")
+        st.caption("Bestandsnaam")
+
+    with col2:
+        st.markdown("**→**")
+        st.caption("Extract ID")
+
+    with col3:
+        st.markdown("**🔑 Sessie Tabel**")
+        st.code("""MobieleuitvoersessieRegelKey
+= 123456""")
+        st.caption("DWH Lookup")
+
+    with col4:
+        st.markdown("**→**")
+        st.caption("Join op DocumentKey")
+
+    with col5:
+        st.markdown("**📋 Werkbon**")
+        st.code("""WB211396
+Lucardi 490""")
+        st.caption("Resultaat")
+
+    st.divider()
+
+    # ===================
+    # SECTIE 4: DWH STRUCTUUR
+    # ===================
+    st.subheader("🗄️ DWH Database Structuur")
+
+    st.markdown("""
+    De Data Warehouse (DWH) bevat gestructureerde data uit Syntess, georganiseerd per klant.
+    """)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Database connectie:**")
+        st.code("""
+Host: 10.3.152.9
+Port: 5432
+Database: 1229 (Zenith Security)
+Schema: werkbonnen
+        """, language="text")
+
+    with col2:
+        st.markdown("**Relevante tabellen:**")
+        st.code("""
+werkbonnen."Mobiele uitvoersessies"
+werkbonnen."Documenten"
+werkbonnen."Uren"
+        """, language="text")
+
+    st.divider()
+
+    # ===================
+    # SECTIE 5: SQL VOORBEELDEN
+    # ===================
+    st.subheader("💻 SQL Queries")
+
+    with st.expander("Koppeling query: Blob ID → Werkbon"):
+        st.code("""
+-- Haal werkbon info op via blob ID (MobieleuitvoersessieRegelKey)
+SELECT
+    s."MobieleuitvoersessieRegelKey" AS blob_id,
+    s."DocumentKey",
+    d."Werkboncode" AS werkbon_code,
+    d."Klantnaam" AS klant,
+    d."Status",
+    d."Melddatum"
+FROM werkbonnen."Mobiele uitvoersessies" s
+LEFT JOIN werkbonnen."Documenten" d
+    ON s."DocumentKey" = d."DocumentKey"
+WHERE s."MobieleuitvoersessieRegelKey" IN (123456, 123457, ...)
+        """, language="sql")
+
+    with st.expander("Alle sessies voor een werkbon"):
+        st.code("""
+-- Haal alle blobvelden op voor een specifieke werkbon
+SELECT
+    s."MobieleuitvoersessieRegelKey" AS blob_id,
+    s."Medewerker",
+    s."Datum",
+    s."Status"
+FROM werkbonnen."Mobiele uitvoersessies" s
+WHERE s."DocumentKey" = 'WB211396'
+        """, language="sql")
+
+    st.divider()
+
+    # ===================
+    # SECTIE 6: SEMANTISCH MODEL
+    # ===================
+    st.subheader("🧠 Integratie in Semantisch Model")
+
+    st.markdown("""
+    De volgende stap is het beschikbaar maken van de blobvelden in het **semantisch model** in Power BI.
+    """)
+
+    st.success("""
+    **Stap 1: Blobvelden toevoegen (direct te realiseren)**
+    1. Nieuwe DWH tabel met blobveld teksten aanmaken
+    2. Koppeling leggen naar werkbonnen via `DocumentKey`
+    3. Tabel toevoegen aan het semantisch model
+    4. Gebruikers kunnen notities direct in Power BI bekijken bij werkbonnen
+
+    **Koppelveld:** `DocumentKey` (= WerkbonDocumentKey)
+    """)
+
+    st.info("""
+    **Stap 2: AI-verrijking (toekomstige uitbreiding)**
+    - Automatische meerwerk detectie
+    - Classificatie van werkzaamheden
+    - Terugkeer patronen herkenning
+    """)
+
+    st.markdown("""
+    **Dataflow diagram:**
+    ```
+    Syntess Blobvelden → Python Extract → DWH Tabel → Semantisch Model → Power BI
+                                              ↓
+                               (Toekomst: AI verrijking)
+    ```
+    """)
+
+    st.divider()
+
+    # ===================
+    # SECTIE 7: HUIDIGE DATASET STATS
+    # ===================
+    st.subheader("📊 Huidige Dataset Statistieken")
+
     if blob_data:
-        if st.button("🔍 Start Compleetheid Check", type="primary", key="compleet_btn"):
-            with st.spinner("Analyseren van notitie kwaliteit..."):
-                resultaten = run_compleetheid_analyse(blob_data)
+        metadata = blob_data.get("metadata", {})
+        totals = metadata.get("totals", {})
+        koppeling_stats = metadata.get("werkbon_koppeling", {})
 
-            st.divider()
+        col1, col2, col3 = st.columns(3)
 
-            # Samenvatting
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Gemiddelde score", f"{resultaten['gemiddelde_score']:.0f}%")
-            with col2:
-                st.metric("Goed", resultaten["verdeling"]["GOED"],
-                         help="Score >= 75%")
-            with col3:
-                st.metric("Matig", resultaten["verdeling"]["MATIG"],
-                         help="Score 50-75%")
-            with col4:
-                st.metric("Onvolledig", resultaten["verdeling"]["ONVOLLEDIG"],
-                         help="Score < 50%")
+        with col1:
+            st.metric("Totaal blob records", sum(totals.values()) if totals else 0)
 
-            # Visualisatie
-            st.divider()
-            st.subheader("📊 Kwaliteitsverdeling")
+        with col2:
+            st.metric("Met sessie koppeling", koppeling_stats.get("totaal_sessies_gekoppeld", "N/A"))
 
-            totaal = sum(resultaten["verdeling"].values())
-            col1, col2, col3 = st.columns(3)
+        with col3:
+            st.metric("Met werkbon details", koppeling_stats.get("totaal_werkbonnen", "N/A"))
 
-            with col1:
-                pct = (resultaten["verdeling"]["GOED"] / totaal) * 100 if totaal else 0
-                st.markdown("**✅ Goed**")
-                st.progress(pct / 100)
-                st.caption(f"{pct:.0f}%")
-
-            with col2:
-                pct = (resultaten["verdeling"]["MATIG"] / totaal) * 100 if totaal else 0
-                st.markdown("**⚠️ Matig**")
-                st.progress(pct / 100)
-                st.caption(f"{pct:.0f}%")
-
-            with col3:
-                pct = (resultaten["verdeling"]["ONVOLLEDIG"] / totaal) * 100 if totaal else 0
-                st.markdown("**❌ Onvolledig**")
-                st.progress(pct / 100)
-                st.caption(f"{pct:.0f}%")
-
-            # Verbeterpunten
-            st.divider()
-            st.subheader("💡 Verbeterpunten")
-
-            st.markdown("""
-            **Vereiste elementen voor complete notitie:**
-            - ✏️ **Actie** - Wat is er gedaan? (vervangen, getest, aangepast)
-            - 📍 **Locatie** - Waar precies? (zone, verdieping, ruimte)
-            - 🔧 **Component** - Welk onderdeel? (PIR, camera, slot)
-            - ✅ **Resultaat** - Wat is de status? (werkt, opgelost, defect)
-            """)
-
-            # Onvolledige notities tonen
-            st.divider()
-            st.subheader("❌ Onvolledige Notities (actie nodig)")
-
-            for i, item in enumerate(resultaten["details"]["ONVOLLEDIG"][:10], 1):
-                ontbrekend = [k for k, v in item["elementen"].items() if not v]
-                with st.expander(f"#{i} | Score {item['score']}% | Ontbreekt: {', '.join(ontbrekend)}"):
-                    st.markdown(f"**ID:** {item['id']}")
-                    st.markdown(f"**Score:** {item['score']}%")
-                    st.markdown("**Aanwezige elementen:**")
-                    for elem, aanwezig in item["elementen"].items():
-                        icon = "✅" if aanwezig else "❌"
-                        st.write(f"{icon} {VEREISTE_ELEMENTEN[elem]['beschrijving']}")
-                    st.divider()
-                    st.text(item["tekst"])
+        st.markdown("**Per blobveld type:**")
+        for veld, aantal in totals.items():
+            st.write(f"- {veld.replace('_', ' ').title()}: {aantal}")
     else:
         st.warning("Geen data geladen")
 
 # Footer
 st.divider()
-st.caption("Blob Analyse v0.4 | Zenith Security Pilot | © Notifica B.V.")
+st.caption("Blob Analyse v0.5 | Zenith Security Pilot | © Notifica B.V.")
