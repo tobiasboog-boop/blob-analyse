@@ -23,9 +23,10 @@ ENV/
 output/
 *.csv
 
-# JSON files (except sample data)
+# JSON files (except sample data and werkbonnen)
 *.json
 !data/sample_data.json
+!data/werkbonnen_zenith.json
 
 # Logs
 *.log

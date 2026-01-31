@@ -1,11 +1,14 @@
 # Blob Analyse - Zenith Security
 # Python dependencies
 
-# Streamlit app (voor later)
+# Streamlit app
 streamlit>=1.30.0
 
 # Data processing
 pandas>=2.0.0
+
+# Database
+psycopg2-binary>=2.9.0
 
 # AI/LLM integratie (voor prototype app)
 openai>=1.0.0
