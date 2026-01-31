@@ -114,19 +114,29 @@ def scan_for_meerwerk(tekst):
     return gevonden
 
 
+def clean_tekst(tekst):
+    """Verwijder RTF rommel uit tekst."""
+    # Verwijder "Arial;Symbol;" en varianten
+    tekst = re.sub(r'^[A-Za-z;]+;\s*\n*', '', tekst)
+    # Verwijder leading 'd' die vaak overblijft
+    tekst = re.sub(r'^\s*d([A-Z])', r'\1', tekst)
+    return tekst.strip()
+
+
 def run_meerwerk_analyse(blob_data):
     """Voer meerwerk analyse uit op alle notities."""
     resultaten = []
 
     for notitie in blob_data.get("monteur_notities", []):
         tekst = notitie.get("tekst", "")
-        meerwerk = scan_for_meerwerk(tekst)
+        tekst_clean = clean_tekst(tekst)
+        meerwerk = scan_for_meerwerk(tekst_clean)
 
         if meerwerk:
             totaal_waarde = sum(m["geschatte_waarde"] for m in meerwerk)
             resultaten.append({
                 "id": notitie.get("id"),
-                "tekst": tekst[:300],
+                "tekst": tekst_clean[:300],
                 "meerwerk_items": meerwerk,
                 "aantal_items": len(meerwerk),
                 "geschatte_waarde": totaal_waarde
@@ -154,8 +164,12 @@ def classify_werk(tekst):
     """Classificeer werk als contract of meerwerk."""
     tekst_lower = tekst.lower()
 
-    contract_score = sum(1 for kw in CONTRACT_KEYWORDS if kw in tekst_lower)
-    meerwerk_score = sum(1 for kw in MEERWERK_KEYWORDS if kw in tekst_lower)
+    # Vind welke keywords matchen
+    contract_matches = [kw for kw in CONTRACT_KEYWORDS if kw in tekst_lower]
+    meerwerk_matches = [kw for kw in MEERWERK_KEYWORDS if kw in tekst_lower]
+
+    contract_score = len(contract_matches)
+    meerwerk_score = len(meerwerk_matches)
 
     # Bepaal classificatie
     if meerwerk_score > contract_score:
@@ -172,7 +186,9 @@ def classify_werk(tekst):
         "classificatie": classificatie,
         "confidence": confidence,
         "contract_indicators": contract_score,
-        "meerwerk_indicators": meerwerk_score
+        "meerwerk_indicators": meerwerk_score,
+        "contract_matches": contract_matches,
+        "meerwerk_matches": meerwerk_matches
     }
 
 
@@ -182,15 +198,16 @@ def run_contract_analyse(blob_data):
 
     for notitie in blob_data.get("monteur_notities", []):
         tekst = notitie.get("tekst", "")
-        classificatie = classify_werk(tekst)
+        tekst_clean = clean_tekst(tekst)
+        classificatie = classify_werk(tekst_clean)
 
         resultaten[classificatie["classificatie"]].append({
             "id": notitie.get("id"),
-            "tekst": tekst[:200],
+            "tekst": tekst_clean[:250],
             "classificatie": classificatie["classificatie"],
             "confidence": classificatie["confidence"],
-            "contract_ind": classificatie["contract_indicators"],
-            "meerwerk_ind": classificatie["meerwerk_indicators"]
+            "contract_matches": classificatie["contract_matches"],
+            "meerwerk_matches": classificatie["meerwerk_matches"]
         })
 
     return resultaten
@@ -534,13 +551,35 @@ with tab2:
             st.divider()
             st.subheader("🔴 Potentieel Meerwerk (te factureren)")
 
+            st.markdown("""
+            **Hoe werkt het?** De classificatie zoekt naar keywords:
+            - 🔴 **Meerwerk keywords:** vervangen, defect, kapot, storing, reparatie, nieuw, extra, etc.
+            - 🟢 **Contract keywords:** onderhoud, preventief, controle, inspectie, periodiek, etc.
+            """)
+
             for i, item in enumerate(resultaten["MEERWERK"][:15], 1):
-                with st.expander(f"#{i} | {item['confidence']}% zekerheid | ID: {item['id']}"):
-                    st.markdown(f"**Classificatie:** {item['classificatie']}")
-                    st.markdown(f"**Zekerheid:** {item['confidence']}%")
-                    st.markdown(f"**Contract indicatoren:** {item['contract_ind']} | **Meerwerk indicatoren:** {item['meerwerk_ind']}")
+                meerwerk_kw = ", ".join(item.get("meerwerk_matches", [])) or "geen"
+                with st.expander(f"#{i} | Gevonden: **{meerwerk_kw}** | ID: {item['id']}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**🔴 Meerwerk keywords gevonden:**")
+                        if item.get("meerwerk_matches"):
+                            for kw in item["meerwerk_matches"]:
+                                st.write(f"  • `{kw}`")
+                        else:
+                            st.write("  (geen)")
+                    with col2:
+                        st.markdown("**🟢 Contract keywords gevonden:**")
+                        if item.get("contract_matches"):
+                            for kw in item["contract_matches"]:
+                                st.write(f"  • `{kw}`")
+                        else:
+                            st.write("  (geen)")
+
+                    st.markdown(f"**Conclusie:** {item['confidence']}% zekerheid dat dit **meerwerk** is")
                     st.divider()
-                    st.text(item["tekst"])
+                    st.markdown("**Originele notitie:**")
+                    st.info(item["tekst"])
     else:
         st.warning("Geen data geladen")
 
