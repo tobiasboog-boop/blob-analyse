@@ -21,9 +21,11 @@ ENV/
 
 # Output/Data (niet committen - grote bestanden)
 output/
-data/
-*.json
 *.csv
+
+# JSON files (except sample data)
+*.json
+!data/sample_data.json
 
 # Logs
 *.log
