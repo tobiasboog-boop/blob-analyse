@@ -392,6 +392,12 @@ st.divider()
 
 # Sidebar
 with st.sidebar:
+    # Notifica logo
+    logo_path = Path(__file__).parent / "assets" / "notifica_logo.jpg"
+    if logo_path.exists():
+        st.image(str(logo_path), use_container_width=True)
+        st.divider()
+
     st.header("Over deze app")
     st.markdown("""
     Deze app analyseert ongestructureerde blobvelden
