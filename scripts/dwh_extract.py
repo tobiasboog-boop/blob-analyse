@@ -14,20 +14,29 @@ from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-# Configuratie
+# Configuratie - wachtwoord via environment variable
 DWH_CONFIG = {
-    "host": "10.3.152.9",
-    "port": 5432,
-    "database": "1229",  # Zenith Security klantnummer
-    "user": "postgres",
-    "password": os.environ.get("NOTIFICA_DWH_PASSWORD", "TQwSTtLM9bSaLD")
+    "host": os.environ.get("NOTIFICA_DWH_HOST", "10.3.152.9"),
+    "port": int(os.environ.get("NOTIFICA_DWH_PORT", "5432")),
+    "database": os.environ.get("NOTIFICA_DWH_DATABASE", "1229"),
+    "user": os.environ.get("NOTIFICA_DWH_USER", "postgres"),
+    "password": os.environ.get("NOTIFICA_DWH_PASSWORD")  # REQUIRED - set via .env
 }
+
+def check_config():
+    """Check of de vereiste configuratie aanwezig is."""
+    if not DWH_CONFIG["password"]:
+        raise ValueError(
+            "NOTIFICA_DWH_PASSWORD environment variable is niet gezet.\n"
+            "Zet deze in een .env bestand of als environment variable."
+        )
 
 OUTPUT_PATH = Path(__file__).parent.parent / "data" / "werkbonnen_zenith.json"
 
 
 def get_connection():
     """Maak connectie met de DWH."""
+    check_config()
     return psycopg2.connect(
         host=DWH_CONFIG["host"],
         port=DWH_CONFIG["port"],
