@@ -16,18 +16,26 @@ st.set_page_config(
 
 
 @st.cache_data
-def load_data():
-    """Laad de sample data uit JSON."""
+def load_blob_data():
+    """Laad de blobvelden sample data."""
     data_path = Path(__file__).parent / "data" / "sample_data.json"
-
     if not data_path.exists():
         return None
-
     with open(data_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def search_in_data(data, query, selected_types):
+@st.cache_data
+def load_werkbonnen_data():
+    """Laad de werkbonnen data uit DWH extract."""
+    data_path = Path(__file__).parent / "data" / "werkbonnen_zenith.json"
+    if not data_path.exists():
+        return None
+    with open(data_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def search_in_blobs(data, query, selected_types):
     """Zoek in de blobvelden data."""
     results = []
     query_lower = query.lower()
@@ -53,8 +61,53 @@ def search_in_data(data, query, selected_types):
     return results
 
 
+def find_blob_for_werkbon(blob_data, werkbon_id):
+    """Zoek blobvelden die mogelijk bij een werkbon horen."""
+    results = {
+        "monteur_notities": [],
+        "storing_meldingen": [],
+        "werk_context": [],
+        "uren_registraties": []
+    }
+
+    # Zoek in alle blob types naar het werkbon ID
+    werkbon_id_str = str(werkbon_id)
+
+    for blob_type in results.keys():
+        for item in blob_data.get(blob_type, []):
+            item_id = str(item.get("id", ""))
+            # Check of de ID overeenkomt of in de tekst voorkomt
+            if item_id == werkbon_id_str or werkbon_id_str in item.get("tekst", ""):
+                results[blob_type].append(item)
+
+    return results
+
+
+def search_werkbonnen(werkbonnen_data, query):
+    """Zoek in werkbonnen."""
+    results = []
+    query_lower = query.lower()
+
+    for wb in werkbonnen_data.get("werkbonnen", []):
+        # Zoek in meerdere velden
+        searchable = " ".join([
+            str(wb.get("Werkbon", "")),
+            str(wb.get("Klant", "")),
+            str(wb.get("Monteur", "")),
+            str(wb.get("Status", "")),
+            str(wb.get("Referentie", "")),
+            str(wb.get("Werkorder", ""))
+        ]).lower()
+
+        if query_lower in searchable:
+            results.append(wb)
+
+    return results
+
+
 # Load data
-data = load_data()
+blob_data = load_blob_data()
+werkbonnen_data = load_werkbonnen_data()
 
 # Header
 st.title("🔍 Blob Analyse - Zenith Security")
@@ -80,83 +133,184 @@ with st.sidebar:
     st.markdown("**Klant:** Zenith Security (1229)")
     st.markdown("**Status:** Pilot / Prototype")
 
-    if data:
+    if blob_data:
         st.divider()
-        st.markdown("**Data geladen:**")
-        totals = data.get("metadata", {}).get("totals", {})
+        st.markdown("**Blobvelden:**")
+        totals = blob_data.get("metadata", {}).get("totals", {})
         st.caption(f"Notities: {totals.get('monteur_notities', 0)}")
         st.caption(f"Storingen: {totals.get('storing_meldingen', 0)}")
         st.caption(f"Cases: {totals.get('werk_context', 0)}")
         st.caption(f"Uren: {totals.get('uren_registraties', 0)}")
 
+    if werkbonnen_data:
+        st.divider()
+        st.markdown("**Werkbonnen (DWH):**")
+        wb_totals = werkbonnen_data.get("metadata", {}).get("totals", {})
+        st.caption(f"Werkbonnen: {wb_totals.get('werkbonnen', 0)}")
+        st.caption(f"Paragrafen: {wb_totals.get('paragrafen', 0)}")
+
 # Main content
-tab1, tab2, tab3 = st.tabs(["📊 Overzicht", "🔎 Zoeken", "🤖 AI Analyse"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Overzicht", "📋 Werkbonnen", "🔎 Zoeken", "🤖 AI Analyse"])
 
 with tab1:
     st.header("Dataset Overzicht")
 
-    if data:
-        totals = data.get("metadata", {}).get("totals", {})
+    col1, col2 = st.columns(2)
 
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Monteur Notities", f"{totals.get('monteur_notities', 0)}", help="AT_MWBSESS/NOTITIE.txt")
-        with col2:
-            st.metric("Storingsmeldingen", f"{totals.get('storing_meldingen', 0)}", help="AT_UITVBEST/TEKST.txt")
-        with col3:
-            st.metric("Casebeschrijvingen", f"{totals.get('werk_context', 0)}", help="AT_WERK/GC_INFORMATIE.txt")
-        with col4:
-            st.metric("Urenregistraties", f"{totals.get('uren_registraties', 0)}", help="AT_MWBSESS/INGELEVERDE_URENREGELS.txt")
+    with col1:
+        st.subheader("Blobvelden")
+        if blob_data:
+            totals = blob_data.get("metadata", {}).get("totals", {})
+            metrics_col1, metrics_col2 = st.columns(2)
+            with metrics_col1:
+                st.metric("Monteur Notities", totals.get('monteur_notities', 0))
+                st.metric("Casebeschrijvingen", totals.get('werk_context', 0))
+            with metrics_col2:
+                st.metric("Storingsmeldingen", totals.get('storing_meldingen', 0))
+                st.metric("Urenregistraties", totals.get('uren_registraties', 0))
+        else:
+            st.warning("Geen blobvelden data geladen")
 
-        st.divider()
+    with col2:
+        st.subheader("Werkbonnen (DWH)")
+        if werkbonnen_data:
+            wb_totals = werkbonnen_data.get("metadata", {}).get("totals", {})
+            metrics_col1, metrics_col2 = st.columns(2)
+            with metrics_col1:
+                st.metric("Werkbonnen", wb_totals.get('werkbonnen', 0))
+            with metrics_col2:
+                st.metric("Paragrafen", wb_totals.get('paragrafen', 0))
 
-        st.subheader("Blobveld Types")
+            # Toon extract datum
+            extracted_at = werkbonnen_data.get("metadata", {}).get("extracted_at", "Onbekend")
+            st.caption(f"Laatste extract: {extracted_at[:10] if extracted_at else 'Onbekend'}")
+        else:
+            st.warning("Geen werkbonnen data geladen")
 
-        table_data = {
-            "Blobveld": ["NOTITIE.txt", "TEKST.txt", "GC_INFORMATIE.txt", "INGELEVERDE_URENREGELS.txt"],
-            "Bron": ["AT_MWBSESS", "AT_UITVBEST", "AT_WERK", "AT_MWBSESS"],
-            "Type": ["RTF", "RTF", "RTF", "XML"],
-            "Inhoud": [
-                "Vrije notities van monteurs",
-                "Storingsmeldingen en werkbeschrijvingen",
-                "Casebeschrijvingen en werkbon-context",
-                "Gestructureerde urenregistratie"
-            ]
-        }
-        st.table(table_data)
+    st.divider()
 
-        st.divider()
-
-        # Voorbeelden tonen
-        st.subheader("Voorbeelden uit de data")
-
-        example_type = st.selectbox(
-            "Selecteer type",
-            ["Monteur Notities", "Storingsmeldingen", "Casebeschrijvingen", "Urenregistraties"]
-        )
-
-        type_mapping = {
-            "Monteur Notities": "monteur_notities",
-            "Storingsmeldingen": "storing_meldingen",
-            "Casebeschrijvingen": "werk_context",
-            "Urenregistraties": "uren_registraties"
-        }
-
-        examples = data.get(type_mapping[example_type], [])[:5]
-
-        for i, example in enumerate(examples, 1):
-            with st.expander(f"Voorbeeld {i} - ID: {example.get('id', 'N/A')}"):
-                st.text(example.get("tekst", "Geen tekst beschikbaar"))
-                if example.get("totaal_uren"):
-                    st.caption(f"Totaal uren: {example['totaal_uren']}")
-    else:
-        st.warning("⚠️ Geen data geladen. Zorg dat `data/sample_data.json` aanwezig is.")
+    st.subheader("Blobveld Types")
+    table_data = {
+        "Blobveld": ["NOTITIE.txt", "TEKST.txt", "GC_INFORMATIE.txt", "INGELEVERDE_URENREGELS.txt"],
+        "Bron": ["AT_MWBSESS", "AT_UITVBEST", "AT_WERK", "AT_MWBSESS"],
+        "Type": ["RTF", "RTF", "RTF", "XML"],
+        "Inhoud": [
+            "Vrije notities van monteurs",
+            "Storingsmeldingen en werkbeschrijvingen",
+            "Casebeschrijvingen en werkbon-context",
+            "Gestructureerde urenregistratie"
+        ]
+    }
+    st.table(table_data)
 
 with tab2:
+    st.header("Werkbonnen Browser")
+
+    if werkbonnen_data:
+        # Zoekbalk
+        wb_search = st.text_input("🔍 Zoek werkbon", placeholder="Zoek op werkbon, klant, monteur, status...")
+
+        # Filter opties
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            # Status filter
+            all_statuses = list(set(wb.get("Status", "Onbekend") for wb in werkbonnen_data.get("werkbonnen", [])))
+            status_filter = st.multiselect("Status", all_statuses, default=[])
+
+        with col2:
+            # Monteur filter
+            all_monteurs = list(set(wb.get("Monteur", "Onbekend") for wb in werkbonnen_data.get("werkbonnen", []) if wb.get("Monteur")))
+            monteur_filter = st.multiselect("Monteur", sorted(all_monteurs)[:20], default=[])
+
+        with col3:
+            max_wb = st.slider("Max resultaten", 10, 100, 25)
+
+        # Filter werkbonnen
+        filtered_wb = werkbonnen_data.get("werkbonnen", [])
+
+        if wb_search:
+            filtered_wb = search_werkbonnen(werkbonnen_data, wb_search)
+
+        if status_filter:
+            filtered_wb = [wb for wb in filtered_wb if wb.get("Status") in status_filter]
+
+        if monteur_filter:
+            filtered_wb = [wb for wb in filtered_wb if wb.get("Monteur") in monteur_filter]
+
+        st.divider()
+        st.markdown(f"**{len(filtered_wb)} werkbonnen** gevonden")
+
+        # Toon werkbonnen
+        for wb in filtered_wb[:max_wb]:
+            werkbon_titel = wb.get("Werkbon", "Onbekend")
+            status = wb.get("Status", "")
+            monteur = wb.get("Monteur", "")
+            melddatum = wb.get("MeldDatum", "")[:10] if wb.get("MeldDatum") else ""
+
+            with st.expander(f"📋 {werkbon_titel} | {status} | {melddatum}"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("**Werkbon details:**")
+                    st.write(f"**Status:** {status}")
+                    st.write(f"**Monteur:** {monteur}")
+                    st.write(f"**Klant:** {wb.get('Klant', '')}")
+                    st.write(f"**Melddatum:** {melddatum}")
+                    st.write(f"**Type:** {wb.get('Type', '')}")
+                    st.write(f"**Prioriteit:** {wb.get('Prioriteit', '')}")
+
+                with col2:
+                    st.markdown("**Extra info:**")
+                    st.write(f"**Referentie:** {wb.get('Referentie', '')}")
+                    st.write(f"**Werkorder:** {wb.get('Werkorder', '')}")
+                    st.write(f"**Postcode:** {wb.get('Postcode', '')} {wb.get('Plaats', '')}")
+                    st.write(f"**Hoofdwerkbon:** {wb.get('Hoofdwerkbon', '')}")
+
+                # Zoek gekoppelde blobvelden
+                if blob_data:
+                    wb_id = wb.get("WerkbonDocumentKey")
+                    if wb_id:
+                        st.divider()
+                        st.markdown("**Gekoppelde blobvelden:**")
+
+                        blobs = find_blob_for_werkbon(blob_data, wb_id)
+                        total_blobs = sum(len(v) for v in blobs.values())
+
+                        if total_blobs > 0:
+                            for blob_type, items in blobs.items():
+                                if items:
+                                    type_labels = {
+                                        "monteur_notities": "📝 Monteur Notities",
+                                        "storing_meldingen": "⚠️ Storingsmeldingen",
+                                        "werk_context": "📄 Casebeschrijvingen",
+                                        "uren_registraties": "⏱️ Urenregistraties"
+                                    }
+                                    st.markdown(f"**{type_labels.get(blob_type, blob_type)}:** {len(items)}")
+                                    for item in items[:3]:
+                                        st.text(item.get("tekst", "")[:200] + "...")
+                        else:
+                            st.info("Geen direct gekoppelde blobvelden gevonden voor deze werkbon ID")
+
+                # Toon paragrafen
+                paragrafen = [p for p in werkbonnen_data.get("paragrafen", [])
+                              if p.get("WerkbonDocumentKey") == wb.get("WerkbonDocumentKey")]
+
+                if paragrafen:
+                    st.divider()
+                    st.markdown(f"**Paragrafen ({len(paragrafen)}):**")
+                    for p in paragrafen[:5]:
+                        st.write(f"- {p.get('Werkbonparagraaf omschrijving', 'Geen omschrijving')}")
+                        if p.get("Storing"):
+                            st.caption(f"  Storing: {p.get('Storing')}")
+    else:
+        st.warning("Geen werkbonnen data geladen. Run `scripts/dwh_extract.py` om data op te halen.")
+
+with tab3:
     st.header("Zoeken in Blobvelden")
 
-    if data:
-        search_query = st.text_input("🔍 Zoekterm", placeholder="Bijv. storing, alarm, preventie, sleutel...")
+    if blob_data:
+        search_query = st.text_input("🔍 Zoekterm", placeholder="Bijv. storing, alarm, preventie, sleutel...", key="blob_search")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -166,46 +320,41 @@ with tab2:
                 default=["Monteur Notities", "Storingsmeldingen", "Casebeschrijvingen"]
             )
         with col2:
-            max_results = st.slider("Max resultaten", 10, 100, 25)
+            max_results = st.slider("Max resultaten", 10, 100, 25, key="blob_max")
 
         if search_query:
-            results = search_in_data(data, search_query, blobveld_filter)
+            results = search_in_blobs(blob_data, search_query, blobveld_filter)
 
             st.divider()
 
             if results:
                 st.success(f"**{len(results)} resultaten** gevonden voor '{search_query}'")
 
-                # Toon resultaten per type
                 for i, result in enumerate(results[:max_results], 1):
                     with st.expander(f"{result['type']} - ID: {result['id']}"):
-                        # Highlight de zoekterm
-                        tekst = result['tekst']
-                        st.text(tekst)
-
+                        st.text(result['tekst'])
                         if result.get('totaal_uren'):
                             st.caption(f"Totaal uren: {result['totaal_uren']}")
 
                 if len(results) > max_results:
-                    st.info(f"Toont {max_results} van {len(results)} resultaten. Verhoog 'Max resultaten' om meer te zien.")
+                    st.info(f"Toont {max_results} van {len(results)} resultaten.")
             else:
                 st.warning(f"Geen resultaten gevonden voor '{search_query}'")
         else:
             st.info("Voer een zoekterm in om te zoeken in de blobvelden.")
 
-            # Suggesties
             st.markdown("**Suggesties:**")
             suggestions = ["storing", "alarm", "sleutel", "camera", "defect", "monteur", "klant"]
             cols = st.columns(len(suggestions))
             for i, suggestion in enumerate(suggestions):
                 with cols[i]:
                     if st.button(suggestion, key=f"sug_{suggestion}"):
-                        st.session_state.search_query = suggestion
+                        st.session_state.blob_search = suggestion
                         st.rerun()
     else:
-        st.warning("⚠️ Geen data geladen.")
+        st.warning("Geen blobvelden data geladen.")
 
-with tab3:
+with tab4:
     st.header("AI Analyse")
 
     st.info("🚧 **Coming soon:** AI-analyse met OpenAI/Claude voor:")
@@ -221,9 +370,8 @@ with tab3:
 
     st.subheader("Voorbeeld: Notitie Analyse")
 
-    # Laat gebruiker een voorbeeld kiezen of eigen tekst invoeren
-    if data:
-        example_texts = [item["tekst"][:500] for item in data.get("monteur_notities", [])[:5]]
+    if blob_data:
+        example_texts = [item["tekst"][:500] for item in blob_data.get("monteur_notities", [])[:5]]
 
         input_method = st.radio("Invoer methode", ["Selecteer voorbeeld", "Eigen tekst"])
 
@@ -245,7 +393,6 @@ with tab3:
 
     if st.button("🤖 Analyseer met AI", type="primary"):
         with st.spinner("Analyseren..."):
-            # Placeholder voor AI analyse
             st.success("**AI Analyse Resultaat:**")
             st.markdown("""
             - **Status:** Werk niet afgerond
@@ -258,4 +405,4 @@ with tab3:
 
 # Footer
 st.divider()
-st.caption("Blob Analyse v0.2 | Zenith Security Pilot | © Notifica B.V.")
+st.caption("Blob Analyse v0.3 | Zenith Security Pilot | © Notifica B.V.")
