@@ -13,7 +13,7 @@ import pandas as pd
 import json
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Page config
 st.set_page_config(
@@ -328,9 +328,53 @@ Data wordt gecombineerd uit DWH + Blobveld tabellen.
 
 st.divider()
 
-# Data laden indicator
-with st.spinner("Data laden uit database..."):
-    rapport_data = combine_data_for_rapport()
+# Eerst filters tonen VOOR data laden
+st.subheader("Selecteer Periode")
+
+col1, col2 = st.columns([3, 1])
+with col1:
+    periode_opties = ["Laatste maand", "Laatste 3 maanden", "Laatste 6 maanden", "Laatste jaar", "Alles"]
+    geselecteerde_periode = st.selectbox(
+        "Hoeveel data wil je laden?",
+        options=periode_opties,
+        index=1  # Default: Laatste 3 maanden
+    )
+
+with col2:
+    st.write("")  # Spacer
+    st.write("")  # Spacer
+    laad_data_knop = st.button("📥 Laad Data", type="primary", use_container_width=True)
+
+st.divider()
+
+# Data laden alleen na knop drukken
+if laad_data_knop or 'rapport_data' in st.session_state:
+    if laad_data_knop:
+        with st.spinner("Data laden uit database..."):
+            rapport_data = combine_data_for_rapport()
+            st.session_state['rapport_data'] = rapport_data
+    else:
+        rapport_data = st.session_state.get('rapport_data', pd.DataFrame())
+
+    # Filter op basis van periode (alleen voor database mode)
+    if not rapport_data.empty and USE_DATABASE:
+        # Bereken cutoff datum
+        vandaag = datetime.now()
+        if geselecteerde_periode == "Laatste maand":
+            cutoff = vandaag - timedelta(days=30)
+        elif geselecteerde_periode == "Laatste 3 maanden":
+            cutoff = vandaag - timedelta(days=90)
+        elif geselecteerde_periode == "Laatste 6 maanden":
+            cutoff = vandaag - timedelta(days=180)
+        elif geselecteerde_periode == "Laatste jaar":
+            cutoff = vandaag - timedelta(days=365)
+        else:  # Alles
+            cutoff = None
+
+        if cutoff:
+            rapport_data['datum_dt'] = pd.to_datetime(rapport_data['datum'], errors='coerce')
+            rapport_data = rapport_data[rapport_data['datum_dt'] >= cutoff].copy()
+            rapport_data = rapport_data.drop('datum_dt', axis=1)
 
 if not rapport_data.empty:
     # === FILTERS ===
@@ -434,7 +478,18 @@ if not rapport_data.empty:
     st.info("💡 **Tip:** Open de CSV in Excel voor verdere verwerking")
 
 else:
-    st.warning("Geen data beschikbaar. Controleer de database connectie.")
+    # Nog geen data geladen
+    if laad_data_knop:
+        st.warning("Geen data beschikbaar. Controleer de database connectie.")
+    else:
+        st.info("👆 **Klik op 'Laad Data' om te beginnen**")
+
+        st.markdown("""
+        **Tips:**
+        - Start met 'Laatste 3 maanden' voor snelle resultaten
+        - Gebruik 'Alles' alleen als je de volledige dataset nodig hebt
+        - Na laden kun je verder filteren op klant en monteur
+        """)
 
     # Debug info
     with st.expander("🔧 Debug informatie"):
