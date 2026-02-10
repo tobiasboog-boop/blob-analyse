@@ -19,6 +19,10 @@ ENV/
 .env.local
 *.env
 
+# Streamlit secrets (BELANGRIJK - bevat database credentials!)
+.streamlit/secrets.toml
+secrets.toml
+
 # Output/Data (niet committen - grote bestanden)
 output/
 *.csv
