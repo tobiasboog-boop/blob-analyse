@@ -347,6 +347,9 @@ with col2:
 
 st.divider()
 
+# Initialiseer rapport_data
+rapport_data = pd.DataFrame()
+
 # Data laden alleen na knop drukken
 if laad_data_knop or 'rapport_data' in st.session_state:
     if laad_data_knop:
