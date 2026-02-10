@@ -23,6 +23,33 @@ st.set_page_config(
 )
 
 # =============================================================================
+# APP AUTHENTICATION
+# =============================================================================
+
+def check_app_password():
+    """Check if user has entered correct app password."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.title("🔒 Login - Zenith Maandrapportage")
+
+        with st.form("login_form"):
+            password_input = st.text_input("Wachtwoord", type="password")
+            submit = st.form_submit_button("Inloggen")
+
+            if submit:
+                app_password = st.secrets.get("APP_PASSWORD", "z&fo@GeVqZ%COFBRsWmjX$sV")
+                if password_input == app_password:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect wachtwoord")
+
+        st.stop()
+
+
+# =============================================================================
 # CONFIGURATIE & SECRETS
 # =============================================================================
 
@@ -253,6 +280,9 @@ def combine_data_for_rapport():
 # =============================================================================
 # STREAMLIT APP
 # =============================================================================
+
+# Check app password first
+check_app_password()
 
 # Header
 st.title("📊 Maandrapportage - Zenith Security")
